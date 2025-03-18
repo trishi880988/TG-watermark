@@ -1,9 +1,2 @@
-pyrogram
-pillow
-aiohttp
-hachoir
-python-dotenv
-pytest
-pycryptodome
-pymongo
-tgcrypto
+python-telegram-bot==20.0
+moviepy==1.0.3
