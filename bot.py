@@ -2,7 +2,7 @@ import os
 import time
 import subprocess
 from pyrogram import Client, filters
-from pyrogram.types import ChatAction
+from pyrogram.enums import ChatAction
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -60,7 +60,7 @@ async def watermark(client, message):
     await message.reply_chat_action(ChatAction.UPLOAD_VIDEO)
 
     with open(output_path, "rb") as video_file:
-        msg = await message.reply_video(video=video_file, caption="✅ Watermarked Successfully!")
+        await message.reply_video(video=video_file, caption="✅ Watermarked Successfully!")
 
     upload_end = time.time()
     upload_time = upload_end - upload_start
