@@ -6,4 +6,4 @@ python-dotenv
 pytest
 pycryptodome
 pymongo
-
+tgcrypto
