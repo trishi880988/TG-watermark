@@ -1,37 +1,81 @@
 import os
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from pyrogram.errors import FloodWait
 
-TOKEN = os.getenv("BOT_TOKEN")
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send me a video and I'll add watermark!")
+DOWNLOAD_DIR = "./downloads"
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = update.message.video or update.message.document
-    file = await video.get_file()
-    await update.message.reply_text("Downloading...")
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
 
-    input_path = "input.mp4"
-    output_path = "output.mp4"
+app = Client("watermark-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-    await file.download_to_drive(input_path)
 
-    clip = VideoFileClip(input_path)
-    txt = TextClip("Join @skillwithgaurav", fontsize=40, color='white', font='Poppins-Bold')
-    txt = txt.set_pos(("center", "bottom")).set_duration(clip.duration)
+async def progress_bar(current, total, status_message, stage):
+    try:
+        percentage = (current / total) * 100
+        progress = f"[{'█' * int(percentage // 10)}{'░' * (10 - int(percentage // 10))}] {percentage:.1f}%"
+        await status_message.edit_text(f"{stage}\n{progress}")
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
 
-    final = CompositeVideoClip([clip, txt])
-    final.write_videofile(output_path, codec="libx264", audio_codec="aac")
 
-    await update.message.reply_video(video=open(output_path, 'rb'))
+@app.on_message(filters.video)
+async def watermark_video(client: Client, message: Message):
+    status = await message.reply("⏳ Downloading video...")
 
-    os.remove(input_path)
-    os.remove(output_path)
+    video_path = os.path.join(DOWNLOAD_DIR, f"{message.video.file_unique_id}.mp4")
+    output_path = os.path.join(DOWNLOAD_DIR, f"output_{message.video.file_unique_id}.mp4")
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+    try:
+        # Download video
+        await message.download(
+            file_name=video_path,
+            progress=progress_bar,
+            progress_args=(status, "⬇️ Downloading")
+        )
 
-app.run_polling()
+        await status.edit_text("✅ Download complete!\n🔄 Adding watermark...")
+
+        # Watermark via ffmpeg
+        watermark_text = "Join @YourChannel"
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # Use safe default font path
+
+        ffmpeg_cmd = (
+            f'ffmpeg -i "{video_path}" -vf '
+            f'"drawtext=fontfile={font_path}:text=\'{watermark_text}\':x=10:y=H-th-20:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5" '
+            f'-c:a copy "{output_path}" -y'
+        )
+
+        os.system(ffmpeg_cmd)
+
+        if os.path.exists(output_path):
+            await status.edit_text("✅ Watermark added!\n⬆️ Uploading video...")
+
+            await message.reply_video(
+                video=output_path,
+                caption="✅ Watermark successfully added!",
+                progress=progress_bar,
+                progress_args=(status, "⬆️ Uploading")
+            )
+            await status.delete()
+        else:
+            await status.edit_text("❌ Watermark failed!")
+
+    except Exception as e:
+        await status.edit_text(f"⚠️ Error: `{e}`")
+
+    finally:
+        # Cleanup
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+
+app.run()
