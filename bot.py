@@ -1,76 +1,84 @@
 import os
 import time
+import math
 from pyrogram import Client, filters
 from pyrogram.types import Message
-import asyncio
 
-api_id = int(os.environ.get("API_ID"))
-api_hash = os.environ.get("API_HASH")
-bot_token = os.environ.get("BOT_TOKEN")
+API_ID = "YOUR_API_ID"
+API_HASH = "YOUR_API_HASH"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 
-app = Client("watermark_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+DOWN_PATH = "./downloads"
+if not os.path.exists(DOWN_PATH):
+    os.makedirs(DOWN_PATH)
 
-# Human-readable size
-def human_readable_size(size):
-    for unit in ['B','KB','MB','GB']:
-        if size < 1024:
-            return f"{size:.2f} {unit}"
-        size /= 1024
-    return f"{size:.2f} TB"
+app = Client("watermark-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Progress function
-async def progress(current, total, message, start_time, process_type="Downloading"):
+def human_readable(size):
+    if size == 0:
+        return "0B"
+    power = 2**10
+    n = 0
+    Dic_powerN = {0: '', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
+    while size > power:
+        size /= power
+        n += 1
+    return f"{round(size,2)} {Dic_powerN[n]}B"
+
+async def progress(current, total, message, start):
     now = time.time()
-    elapsed = now - start_time
-    speed = current / elapsed
+    diff = now - start
+    speed = human_readable(current / diff) + "/s"
     percentage = current * 100 / total
-    speed_human = human_readable_size(speed)
-    total_human = human_readable_size(total)
-    current_human = human_readable_size(current)
-    eta = (total - current) / speed if speed != 0 else 0
-    eta_formatted = time.strftime("%H:%M:%S", time.gmtime(eta))
+    time_left = (total - current) / (current / diff)
+    progress_bar = "[" + ("=" * int(percentage / 10)) + (" " * (10 - int(percentage / 10))) + "]"
+    await message.edit_text(
+        f"{progress_bar} {round(percentage, 2)}%\n"
+        f"Speed: {speed}\n"
+        f"ETA: {round(time_left)}s"
+    )
 
-    text = (f"{process_type}... {percentage:.2f}%\n"
-            f"📥 {current_human} / {total_human}\n"
-            f"⚡ Speed: {speed_human}/s\n"
-            f"⏳ ETA: {eta_formatted}")
-
-    await message.edit(text)
-
-@app.on_message(filters.video & filters.private)
+@app.on_message(filters.video)
 async def watermark_video(client, message: Message):
-    video = message.video
-    start_time = time.time()
-    sent_msg = await message.reply_text("🔄 Starting download...")
+    try:
+        msg = await message.reply("📥 Downloading video...")
+        start_time = time.time()
 
-    # Download with progress
-    file_path = await message.download(progress=progress, progress_args=(sent_msg, start_time, "📥 Downloading"))
+        video_path = os.path.join(DOWN_PATH, f"{message.video.file_id}.mp4")
+        output_path = os.path.join(DOWN_PATH, f"output_{message.video.file_id}.mp4")
 
-    # File Size
-    size = os.path.getsize(file_path)
-    size_human = human_readable_size(size)
-    await sent_msg.edit(f"✅ Downloaded {size_human}\n⚙️ Watermarking...")
+        # Download with progress
+        await message.download(
+            file_name=video_path,
+            progress=progress,
+            progress_args=(msg, start_time)
+        )
 
-    # Watermark
-    output_path = "./output.mp4"
-    watermark_text = "Join @skillwithgaurav"
+        await msg.edit_text("✅ Download complete!\n🎯 Applying watermark...")
 
-    # ffmpeg command with overwrite
-    cmd = f'ffmpeg -i "{file_path}" -vf "drawtext=text=\'{watermark_text}\':fontcolor=white:fontsize=24:x=10:y=H-th-10" -codec:a copy "{output_path}" -y'
-    os.system(cmd)
+        # Apply watermark with ffmpeg
+        os.system(f"./bin/ffmpeg -i {video_path} -vf drawtext=\"text='Join @YourChannel':x=10:y=H-th-10:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.5\" -codec:a copy {output_path}")
 
-    # Check if output exists
-    if os.path.exists(output_path):
-        await sent_msg.edit("📤 Uploading...")
-        start_upload = time.time()
-        await message.reply_video(output_path, caption="✅ Watermark added!",
-                                  progress=progress, progress_args=(sent_msg, start_upload, "📤 Uploading"))
-        await sent_msg.delete()
-    else:
-        await sent_msg.edit("❌ Watermark failed!")
+        if os.path.exists(output_path):
+            await msg.edit_text("🚀 Uploading video...")
+            upload_start = time.time()
 
-    # Cleanup
-    os.remove(file_path)
-    os.remove(output_path)
+            # Upload with progress
+            await message.reply_video(
+                video=output_path,
+                caption="✅ Watermark applied!",
+                progress=progress,
+                progress_args=(msg, upload_start)
+            )
+
+            await msg.edit_text("✅ Done! 🎉")
+            os.remove(output_path)
+            os.remove(video_path)
+        else:
+            await msg.edit_text("❌ Watermark failed!")
+
+    except Exception as e:
+        await msg.edit_text(f"⚠️ Error: {e}")
 
 app.run()
+
