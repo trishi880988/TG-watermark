@@ -10,15 +10,17 @@ from pyrogram.errors import FloodWait
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH"))
-BOT_TOKEN = os.environ.get("BOT_TOKEN"))
+# Environment variables for API credentials
+API_ID = int(os.environ.get("API_ID", 12345))  # Replace with your API ID
+API_HASH = os.environ.get("API_HASH", "your_api_hash")  # Replace with your API HASH
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")  # Replace with your BOT TOKEN
 
+# Directory to store downloaded and merged files
 DOWNLOAD_DIR = "./downloads"
-
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
+# Initialize Pyrogram Client
 app = Client("merge-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # Memory store for outro video
@@ -60,14 +62,16 @@ async def progress_bar(current, total, message, stage, start_time):
     except Exception as e:
         logger.error(f"Error updating progress bar: {e}")
 
+# Command to start the bot
 @app.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
-        "👋 Hi! Send me your outro video first.\n"
+        "👋 **Hi!** Send me your outro video first.\n"
         "Then send me your main video to merge with the outro.\n\n"
         "✅ I will handle watermarking + merging automatically!"
     )
 
+# Handle video messages
 @app.on_message(filters.video)
 async def handle_videos(client: Client, message: Message):
     global outro_video_path
@@ -130,9 +134,11 @@ async def handle_videos(client: Client, message: Message):
             logger.error(f"Error processing main video: {e}")
             await status.edit_text("❌ **Failed to process main video!**")
         finally:
-            # Cleanup
+            # Cleanup temporary files
             for path in [main_video_path, outro_path, output_path]:
                 if os.path.exists(path):
                     os.remove(path)
 
-app.run()
+# Run the bot
+if __name__ == "__main__":
+    app.run()
