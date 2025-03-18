@@ -5,3 +5,5 @@ hachoir
 python-dotenv
 pytest
 pycryptodome
+pymongo
+
