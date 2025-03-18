@@ -1,174 +1,68 @@
 import os
-import logging
+import asyncio
+import time
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pymongo import MongoClient
-from configs import Config
-from core.ffmpeg import add_watermark
-from core.clean import delete_all
+from pyrogram.types import Message
+import subprocess
 
-# Logging setup
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Config
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WATERMARK_TEXT = "Join-@skillwithgaurav"
 
-# MongoDB setup
-try:
-    mongo_client = MongoClient(Config.MONGO_URI)
-    db = mongo_client[Config.DB_NAME]
-    users = db["user_settings"]
-    logger.info("MongoDB connected successfully.")
-except Exception as e:
-    logger.error(f"MongoDB connection failed: {e}")
-    exit(1)
+# Create bot client
+bot = Client("watermark_bot",
+             api_id=API_ID,
+             api_hash=API_HASH,
+             bot_token=BOT_TOKEN)
 
-# Ensure download directory exists
-os.makedirs(Config.DOWN_PATH, exist_ok=True)
+DOWNLOADS = "downloads"
+os.makedirs(DOWNLOADS, exist_ok=True)
 
-bot = Client("watermark_bot", bot_token=Config.BOT_TOKEN, api_id=Config.API_ID, api_hash=Config.API_HASH)
-
-# --- COMMAND HANDLERS ---
-
-@bot.on_message(filters.command(["start", "help"]) & filters.private)
-async def start_help(client, message):
-    await message.reply_text(
-        f"👋 Hello {message.from_user.first_name}!\n\n"
-        "📌 Send me a PNG/JPG/GIF image as a watermark, then send me your video.\n\n"
-        "⚙️ Customize your watermark below 👇",
-        reply_markup=main_menu()
-    )
-
-def main_menu():
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🧭 Set Position", callback_data="set_position")],
-            [InlineKeyboardButton("📏 Set Size", callback_data="set_size")],
-            [InlineKeyboardButton("🎞️ Set Quality", callback_data="set_quality")]
-        ]
-    )
-
-# --- POSITION SETTER ---
-
-@bot.on_callback_query(filters.regex("set_position"))
-async def position_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "📍 Choose Watermark Position:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("↖ Top-Left", callback_data="pos_10_10"),
-                 InlineKeyboardButton("↗ Top-Right", callback_data="pos_-10_10")],
-                [InlineKeyboardButton("↙ Bottom-Left", callback_data="pos_10_-10"),
-                 InlineKeyboardButton("↘ Bottom-Right", callback_data="pos_-10_-10")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-            ]
-        )
-    )
-
-@bot.on_callback_query(filters.regex("pos_"))
-async def set_position(client, callback_query):
-    pos = callback_query.data.split("_")[1:]
-    users.update_one(
-        {"user_id": callback_query.from_user.id},
-        {"$set": {"position": [int(pos[0]), int(pos[1])]}}
-    )
-    await callback_query.answer("✅ Position updated!")
-    await callback_query.message.edit_text("✔️ Position set successfully!", reply_markup=main_menu())
-
-# --- SIZE SETTER ---
-
-@bot.on_callback_query(filters.regex("set_size"))
-async def size_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "🔍 Choose Watermark Size:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("50%", callback_data="size_50"),
-                 InlineKeyboardButton("75%", callback_data="size_75"),
-                 InlineKeyboardButton("100%", callback_data="size_100")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-            ]
-        )
-    )
-
-@bot.on_callback_query(filters.regex("size_"))
-async def set_size(client, callback_query):
-    size = int(callback_query.data.split("_")[1])
-    users.update_one(
-        {"user_id": callback_query.from_user.id},
-        {"$set": {"size": size}}
-    )
-    await callback_query.answer("✅ Size updated!")
-    await callback_query.message.edit_text("✔️ Size set successfully!", reply_markup=main_menu())
-
-# --- QUALITY SETTER ---
-
-@bot.on_callback_query(filters.regex("set_quality"))
-async def quality_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "🎚️ Choose Video Quality:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Low", callback_data="quality_30"),
-                 InlineKeyboardButton("Medium", callback_data="quality_23"),
-                 InlineKeyboardButton("High", callback_data="quality_18")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-            ]
-        )
-    )
-
-@bot.on_callback_query(filters.regex("quality_"))
-async def set_quality(client, callback_query):
-    quality = int(callback_query.data.split("_")[1])
-    users.update_one(
-        {"user_id": callback_query.from_user.id},
-        {"$set": {"quality": quality}}
-    )
-    await callback_query.answer("✅ Quality updated!")
-    await callback_query.message.edit_text("✔️ Quality set successfully!", reply_markup=main_menu())
-
-# --- BACK BUTTON ---
-
-@bot.on_callback_query(filters.regex("back_main"))
-async def back_main_menu(client, callback_query):
-    await callback_query.message.edit_text("⚙️ Customize your watermark below 👇", reply_markup=main_menu())
-
-# --- PHOTO HANDLER ---
-
-@bot.on_message(filters.photo & filters.private)
-async def handle_watermark_image(client, message):
-    watermark_path = f"{Config.DOWN_PATH}/{message.from_user.id}_watermark.png"
-    await message.download(file_name=watermark_path)
-    await message.reply_text("✅ Watermark saved!\n\n🎥 Now send me your video to apply this watermark.")
-
-# --- VIDEO HANDLER ---
+@bot.on_message(filters.command("start") & filters.private)
+async def start(client, message: Message):
+    await message.reply_text("👋 Send me a video and I'll add a rotating watermark and show speeds!")
 
 @bot.on_message(filters.video & filters.private)
-async def handle_video(client, message):
-    user_id = message.from_user.id
-    watermark_path = f"{Config.DOWN_PATH}/{user_id}_watermark.png"
-    if not os.path.exists(watermark_path):
-        await message.reply_text("⚠️ No watermark found!\n\nPlease send me a watermark image first.")
-        return
+async def process_video(client, message: Message):
+    msg = await message.reply_text("⬇️ Downloading your video...")
 
-    video_path = f"{Config.DOWN_PATH}/{user_id}_video.mp4"
+    video_path = f"{DOWNLOADS}/{message.video.file_id}.mp4"
+    output_path = f"{DOWNLOADS}/watermarked_{message.video.file_id}.mp4"
+
+    # Download with speed
+    download_start = time.time()
     await message.download(file_name=video_path)
+    download_end = time.time()
+    download_speed = round(message.video.file_size / (download_end - download_start) / 1024 / 1024, 2)
 
-    output_path = f"{Config.DOWN_PATH}/{user_id}_output.mp4"
-    user_data = users.find_one({"user_id": user_id}) or {}
+    await msg.edit(f"✨ Applying watermark...\n📥 Download Speed: {download_speed} MB/s")
 
-    position = user_data.get('position', [10, 10])
-    size = user_data.get('size', 100)
-    quality = user_data.get('quality', 23)
+    # Apply watermark
+    ffmpeg_cmd = f"""
+    ffmpeg -i "{video_path}" -vf "
+    drawtext=text='{WATERMARK_TEXT}':fontfile='Poppins-Regular.ttf':fontsize=30:fontcolor=white:borderw=2:
+    shadowcolor=black:shadowx=2:shadowy=2:
+    x='if(lt(mod(t\\,10)\\,5)\\, 10\\, W-tw-10)':
+    y='if(lt(mod(t\\,10)\\,5)\\, 10\\, H-th-10)':
+    alpha='if(lt(mod(t\\,10)\\,5)\\, 0.9\\, 0.9)'
+    " -c:a copy "{output_path}" -y
+    """
+    subprocess.run(ffmpeg_cmd, shell=True, check=True)
 
-    await message.reply_text("🛠️ Applying watermark... Please wait ⏳")
+    # Upload with speed
+    upload_start = time.time()
+    await msg.edit("⏫ Uploading your video...")
+    sent_msg = await message.reply_video(video=output_path, caption="✅ Watermarked video")
+    upload_end = time.time()
+    upload_speed = round(os.path.getsize(output_path) / (upload_end - upload_start) / 1024 / 1024, 2)
 
-    try:
-        await add_watermark(video_path, watermark_path, output_path, tuple(position), size, quality)
-        await client.send_video(message.chat.id, video=output_path, caption="✅ Here is your watermarked video.")
-    except Exception as e:
-        logger.error(f"Watermark processing failed: {e}")
-        await message.reply_text("❌ Failed to process video. Please try again.")
-    finally:
-        delete_all(Config.DOWN_PATH, user_id)
+    await msg.edit(f"✅ Done!\n📥 Download Speed: {download_speed} MB/s\n⏫ Upload Speed: {upload_speed} MB/s")
 
-# --- START BOT ---
+    # Clean up
+    os.remove(video_path)
+    os.remove(output_path)
+
 bot.run()
+
