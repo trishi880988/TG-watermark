@@ -3,115 +3,74 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from configs import Config
-from core.ffmpeg import add_watermark
 from core.clean import delete_all
 
 bot = Client("watermark_bot", bot_token=Config.BOT_TOKEN, api_id=Config.API_ID, api_hash=Config.API_HASH)
 user_settings = {}
 
+# Start & Help command
 @bot.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_help(client, message):
     await message.reply_text(
-        "Send me a PNG/JPG/GIF to use as a watermark, followed by a video.\n"
-        "You can customize the watermark using the buttons below.",
+        "Send me a video and I will add a rotating watermark text on it.\n\n"
+        "Default watermark text: 'Join @yourchannel'\n"
+        "You can customize watermark text using the button below.",
         reply_markup=InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("Set Position", callback_data="set_position")],
-                [InlineKeyboardButton("Set Size", callback_data="set_size")],
-                [InlineKeyboardButton("Set Quality", callback_data="set_quality")]
+                [InlineKeyboardButton("Set Watermark Text", callback_data="set_text")]
             ]
         )
     )
 
-@bot.on_callback_query(filters.regex("set_position"))
-async def position_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "Choose Position:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Top-Left", callback_data="pos_10_10")],
-                [InlineKeyboardButton("Top-Right", callback_data="pos_-10_10")],
-                [InlineKeyboardButton("Bottom-Left", callback_data="pos_10_-10")],
-                [InlineKeyboardButton("Bottom-Right", callback_data="pos_-10_-10")]
-            ]
-        )
-    )
+# Set watermark text button
+@bot.on_callback_query(filters.regex("set_text"))
+async def set_text_prompt(client, callback_query):
+    await callback_query.message.edit_text("Please send me the watermark text you want to use.")
+    user_settings[callback_query.from_user.id] = user_settings.get(callback_query.from_user.id, {})
+    user_settings[callback_query.from_user.id]['awaiting_text'] = True
 
-@bot.on_callback_query(filters.regex("pos_"))
-async def set_position(client, callback_query):
-    pos = callback_query.data.split("_")[1:]
-    user_id = callback_query.from_user.id
-    user_settings[user_id] = user_settings.get(user_id, {})
-    user_settings[user_id]['position'] = (int(pos[0]), int(pos[1]))
-    await callback_query.message.edit_text(f"Watermark position set to {pos}.")
+# Receive watermark text
+@bot.on_message(filters.text & filters.private)
+async def save_text(client, message):
+    user_id = message.from_user.id
+    if user_settings.get(user_id, {}).get('awaiting_text'):
+        user_settings[user_id]['text'] = message.text
+        user_settings[user_id]['awaiting_text'] = False
+        await message.reply_text(f"Watermark text set to: {message.text}")
+    else:
+        await message.reply_text("Send me a video now to apply watermark.")
 
-@bot.on_callback_query(filters.regex("set_size"))
-async def size_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "Choose Size:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("50%", callback_data="size_50")],
-                [InlineKeyboardButton("75%", callback_data="size_75")],
-                [InlineKeyboardButton("100%", callback_data="size_100")]
-            ]
-        )
-    )
-
-@bot.on_callback_query(filters.regex("size_"))
-async def set_size(client, callback_query):
-    size = int(callback_query.data.split("_")[1])
-    user_id = callback_query.from_user.id
-    user_settings[user_id] = user_settings.get(user_id, {})
-    user_settings[user_id]['size'] = size
-    await callback_query.message.edit_text(f"Watermark size set to {size}%.")
-
-@bot.on_callback_query(filters.regex("set_quality"))
-async def quality_buttons(client, callback_query):
-    await callback_query.message.edit_text(
-        "Choose Quality:",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Low", callback_data="quality_30")],
-                [InlineKeyboardButton("Medium", callback_data="quality_23")],
-                [InlineKeyboardButton("High", callback_data="quality_18")]
-            ]
-        )
-    )
-
-@bot.on_callback_query(filters.regex("quality_"))
-async def set_quality(client, callback_query):
-    quality = int(callback_query.data.split("_")[1])
-    user_id = callback_query.from_user.id
-    user_settings[user_id] = user_settings.get(user_id, {})
-    user_settings[user_id]['quality'] = quality
-    await callback_query.message.edit_text(f"Video quality set to {quality}.")
-
-@bot.on_message(filters.photo & filters.private)
-async def handle_watermark_image(client, message):
-    watermark_path = f"{Config.DOWN_PATH}/{message.from_user.id}_watermark.jpg"
-    await message.download(file_name=watermark_path)
-    await message.reply_text("Watermark saved. Now send a video to apply this watermark.")
-
+# Handle video
 @bot.on_message(filters.video & filters.private)
 async def handle_video(client, message):
     user_id = message.from_user.id
-    watermark_path = f"{Config.DOWN_PATH}/{user_id}_watermark.jpg"
-    if not os.path.exists(watermark_path):
-        await message.reply_text("No watermark image found. Please send a watermark image first.")
-        return
-
     video_path = f"{Config.DOWN_PATH}/{user_id}_video.mp4"
     await message.download(file_name=video_path)
 
     output_path = f"{Config.DOWN_PATH}/{user_id}_output.mp4"
     settings = user_settings.get(user_id, {})
-    position = settings.get('position', (10, 10))
-    size = settings.get('size', 100)
-    quality = settings.get('quality', 23)
+    text = settings.get('text', 'Join @yourchannel')
+    await add_watermark(video_path, output_path, text=text)
 
-    await add_watermark(video_path, watermark_path, output_path, position, size, quality)
     await client.send_video(message.chat.id, video=output_path, caption="Here is your watermarked video.")
     delete_all(Config.DOWN_PATH, user_id)
+
+# Watermark Function
+async def add_watermark(input_video, output_video, text="Join @yourchannel", font="Poppins-Regular.ttf", size=24, quality=23):
+    cmd = [
+        "ffmpeg",
+        "-i", input_video,
+        "-vf",
+        f"drawtext=fontfile={font}: text='{text}': fontcolor=white: fontsize={size}: " +
+        "x='if(lt(mod(t,20),5),10, if(lt(mod(t,20),10),W-tw-10, if(lt(mod(t,20),15),10, W-tw-10)))': " +
+        "y='if(lt(mod(t,20),5),10, if(lt(mod(t,20),10),10, if(lt(mod(t,20),15),H-th-10, H-th-10)))': " +
+        "enable='between(t,0,99999)'," +
+        "fade=t=in:st=0:d=0.5:alpha=1",
+        "-c:a", "copy",
+        "-crf", str(quality),
+        output_video
+    ]
+    process = await asyncio.create_subprocess_exec(*cmd)
+    await process.communicate()
 
 bot.run()
